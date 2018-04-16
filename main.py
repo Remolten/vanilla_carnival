@@ -1,4 +1,4 @@
-import pickle
+import random
 
 import tensorflow as tf
 import numpy as np
@@ -6,29 +6,41 @@ from sklearn.datasets import fetch_20newsgroups
 
 classes = 20
 
-learning_rate = 0.1
-training_epochs = 3
-batch_size = 290  # Set to maximum size that will run on my Macbook Pro GPU, you can make it higher if you have more GPU memory
-nodes_per_layer = 10
-layers = 3  # Including the input layer
+learning_rate = 0.15
+keep_rate = 0.8
+beta = 1e-4
+relux_max = 1e6
+
+training_epochs = 10
+batch_size = 100  # Set to maximum size that will run on my Macbook Pro GPU, you can make it higher if you have more GPU memory
+nodes_per_layer = 100
+layers = 10  # Number of hidden layers
 
 config_limit_gpu_memory = 0.49  # Limits how much GPU memory is used so that the program doesn't crash
 
 train_data_raw = fetch_20newsgroups(subset='train', shuffle=True, remove=('headers', 'footers', 'quotes'))
+                                    # categories=('alt.atheism', 'rec.autos', 'sci.crypt'))
 test_data_raw = fetch_20newsgroups(subset='test', shuffle=True, remove=('headers', 'footers', 'quotes'))
+                                   # categories=('alt.atheism', 'rec.autos', 'sci.crypt'))
+
+
+def relux(x):
+    return tf.minimum(tf.nn.relu(x), relux_max)
 
 
 def get_network(input_tensor, weights, biases):
-    # h1
-    next_input = tf.add(tf.matmul(input_tensor, weights[0]), biases[0])
-    layer_1 = tf.nn.relu(next_input)
+    # Input layer
+    next_input = tf.matmul(input_tensor, weights[0])
+    layer = relux(next_input)
 
-    # h2
-    next_input = tf.add(tf.matmul(layer_1, weights[1]), biases[1])
-    layer_2 = tf.nn.relu(next_input)
+    # Hidden layers
+    for i in range(1, layers + 1):
+        next_input = tf.add(tf.matmul(layer, weights[i]), biases[i])
+        layer_before_dropout = relux(next_input)
+        layer = tf.nn.dropout(layer_before_dropout, keep_rate)
 
-    # Output
-    return tf.matmul(layer_2, weights[2]) + biases[2]
+    # Output layer
+    return tf.matmul(layer, weights[len(weights) - 1]) + biases[len(biases)]
 
 
 def generate_weights(total_words):
@@ -37,11 +49,15 @@ def generate_weights(total_words):
 
     # Add the hidden layers
     i = 0
-    for i in range(layers - 1):
-        weights[i + 1] = tf.Variable(tf.random_normal([nodes_per_layer, nodes_per_layer]))
+    for i in range(1, layers + 1):
+        weights[i] = tf.Variable(tf.random_normal([nodes_per_layer, nodes_per_layer]))
 
     # Add the output layer
     weights[i + 1] = tf.Variable(tf.random_normal([nodes_per_layer, classes]))
+
+    # Add all weights to the regularization collection, to do regularization later
+    for weight in list(weights.values())[1:-1]:
+        tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES, weight)
 
     return weights
 
@@ -50,7 +66,7 @@ def generate_biases():
     biases = {}
 
     i = 0
-    for i in range(layers - 1):
+    for i in range(1, layers + 1):
         biases[i] = tf.Variable(tf.random_normal([nodes_per_layer]))
 
     biases[i + 1] = tf.Variable(tf.random_normal([classes]))
@@ -59,8 +75,6 @@ def generate_biases():
 
 
 def process_data(train_data, test_data):
-    # Try to deserialize processed data from file
-
     total_words = 0
     words = {}
 
@@ -103,20 +117,18 @@ def process_data(train_data, test_data):
         output_layer[category] = 1.0
         test_output.append(output_layer)
 
-    # Serialize data so we don't have to process next time
-    # pickle.dump(total_words, open('total_words.pkl', 'wb'))
-    # pickle.dump(train_input, open('train_input.pkl', 'wb'))
-    # pickle.dump(train_output, open('train_output.pkl', 'wb'))
-    # pickle.dump(test_input, open('test_input.pkl', 'wb'))
-    # pickle.dump(test_output, open('test_output.pkl', 'wb'))
-
     return total_words, train_input, train_output, test_input, test_output
 
 
 def get_batch(input_data, output_data):
-    for i in range(len(input_data) // batch_size + 1):
-        yield input_data[i * batch_size:i * batch_size + batch_size]
-        yield output_data[i * batch_size:i * batch_size + batch_size]
+    # Shuffle the data for SGD and better training performance
+    combined = list(zip(input_data, output_data))
+    random.shuffle(combined)
+    rinput_data, routput_data = zip(*combined)
+
+    for i in range(len(rinput_data) // batch_size + 1):
+        yield rinput_data[i * batch_size:i * batch_size + batch_size]
+        yield routput_data[i * batch_size:i * batch_size + batch_size]
 
 
 def main():
@@ -131,14 +143,21 @@ def main():
     # Construct model
     prediction = get_network(input_tensor, weights, biases)
 
-    # Define loss and optimizer
+    # Define regularizer
+    regularization_variables = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+    regularizer = tf.nn.l2_loss(regularization_variables)
+
+    # Define loss
     # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=output_tensor))
-    loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=output_tensor))
+    loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=output_tensor) + beta * regularizer)
+    # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=output_tensor))
+
+    # Define the optimizer
     optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(loss)
 
     # Initializing the variables
-    # init = tf.global_variables_initializer()
-    init = tf.initialize_all_variables()
+    init = tf.global_variables_initializer()
+    # init = tf.initialize_all_variables()
 
     config = tf.ConfigProto()
     config.gpu_options.per_process_gpu_memory_fraction = config_limit_gpu_memory
@@ -149,8 +168,8 @@ def main():
 
         # Training cycle
         for epoch in range(training_epochs):
+            train_batch_generator = get_batch(train_input, train_output)
             for i in range(len(train_input) // batch_size):
-                train_batch_generator = get_batch(train_input, train_output)
                 loss_amount, _ = session.run(fetches=[loss, optimizer], feed_dict={input_tensor: next(train_batch_generator),
                                                                                    output_tensor: next(train_batch_generator)})
                 print('Epoch: {} batch: {} loss: {}'.format(epoch, i, loss_amount))
@@ -160,11 +179,20 @@ def main():
 
         # Calculate accuracy
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, 'float'))
-        print('Accuracy:', accuracy.eval({input_tensor: test_input, output_tensor: test_output}))
 
-    # Serialize weight and bias values
-    # pickle.dump(weights, open('weights.pkl', 'wb'))
-    # pickle.dump(biases, open('biases.pkl', 'wb'))
+        # Calculate the average accuracy from mini batches, which are necessary because of limited GPU memory
+        test_batch_generator = get_batch(test_input, test_output)
+        test_accuracy = 0
+        for i in range(len(test_input) // batch_size):
+            test_accuracy += accuracy.eval({input_tensor: next(test_batch_generator), output_tensor: next(test_batch_generator)})
+
+        train_batch_generator = get_batch(train_input, train_output)
+        train_accuracy = 0
+        for i in range(len(train_input) // batch_size):
+            train_accuracy += accuracy.eval({input_tensor: next(train_batch_generator), output_tensor: next(train_batch_generator)})
+
+        print('Test Accuracy:', test_accuracy / (len(test_input) // batch_size))
+        print('Train Accuracy:', train_accuracy / (len(train_input) // batch_size))
 
 
 if __name__ == '__main__':
