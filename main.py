@@ -21,7 +21,7 @@ training_epochs = 100
 batch_size = 50  # Set to maximum size that will run on my Macbook Pro GPU, you can make it higher if you have more GPU memory
 nodes_per_layer = 100
 layers_scalar = 1  # Scales the number of nodes in each layer down
-layers = 3  # Number of hidden layers
+layers = 1  # Number of hidden layers
 
 keep_alphanumeric = re.compile('[^ \w\']+', re.UNICODE)  # Used to remove all non-alphanumeric characters from the inputs
 
@@ -50,7 +50,7 @@ def get_network(input_tensor, total_words, max_document_length):
 
     # Hidden layers
     conv_pool_layers = []
-    for i in range(1, layers + 1):
+    for i in range(layers):
         for filter_size in filter_sizes:
             conv = get_convolution_layer(layer, filter_size)
             conv_pool_layers.append(get_pooling_layer(conv, max_document_length, filter_size))
