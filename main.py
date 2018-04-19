@@ -7,6 +7,11 @@ from sklearn.datasets import fetch_20newsgroups
 
 classes = 5
 
+embedding_size = 150
+filter_sizes = (2, 3, 4, 5, 6)
+num_filters_per_size = 100
+stride = (1, 1, 1, 1)
+
 learning_rate = 0.1
 keep_rate = 0.7
 beta = 1e-4
@@ -18,7 +23,7 @@ nodes_per_layer = 100
 layers_scalar = 1  # Scales the number of nodes in each layer down
 layers = 3  # Number of hidden layers
 
-keep_alphanumeric = re.compile('[\W_]+', re.UNICODE)  # Used to remove all non-alphanumeric characters from the inputs
+keep_alphanumeric = re.compile('[^ \w\']+', re.UNICODE)  # Used to remove all non-alphanumeric characters from the inputs
 
 config_limit_gpu_memory = 0.49  # Limits how much GPU memory is used so that the program doesn't crash
 
@@ -38,80 +43,57 @@ def relux(x):
     return tf.minimum(tf.nn.leaky_relu(x), relux_max)
 
 
-def get_network(input_tensor, weights, biases):
-    # Input layer
-    next_input = tf.matmul(input_tensor, weights[0])
-    layer = relux(next_input)
+def get_network(input_tensor, total_words, max_document_length):
+    # Input/embedding layer
+    embedding_weights = tf.Variable(tf.random_uniform([total_words, embedding_size], -1, 1))
+    layer = tf.expand_dims(tf.nn.embedding_lookup(embedding_weights, input_tensor), -1)
 
     # Hidden layers
+    conv_pool_layers = []
     for i in range(1, layers + 1):
-        next_input = tf.add(tf.matmul(layer, weights[i]), biases[i])
-        layer_before_dropout = relux(next_input)
-        layer = tf.nn.dropout(layer_before_dropout, keep_rate)
+        for filter_size in filter_sizes:
+            conv = get_convolution_layer(layer, filter_size)
+            conv_pool_layers.append(get_pooling_layer(conv, max_document_length, filter_size))
+
+    # Concatenate all conv_pool layers to perform dropout
+    layer_before_dropout = tf.reshape(tf.concat(conv_pool_layers, 3), (-1, num_filters_per_size * len(filter_sizes)))
+    layer = tf.nn.dropout(layer_before_dropout, keep_rate)
 
     # Output layer
-    return tf.matmul(layer, weights[len(weights) - 1]) + biases[len(biases)]
+    return tf.nn.xw_plus_b(layer, tf.Variable(tf.random_normal((num_filters_per_size * len(filter_sizes), classes))),
+                           tf.Variable(tf.constant(0.1, shape=(classes,))))
 
 
-def generate_weights(total_words):
-    npl = nodes_per_layer
-
-    # Add the input layer
-    weights = {0: tf.Variable(tf.random_normal([total_words, npl]))}
-
-    # Add the hidden layers
-    i = 0
-    for i in range(1, layers + 1):
-        weights[i] = tf.Variable(tf.random_normal([max(npl, classes), max(int(npl * layers_scalar), classes)]))
-        npl = int(npl * layers_scalar)
-
-    # Add the output layer
-    weights[i + 1] = tf.Variable(tf.random_normal([max(npl, classes), classes]))
-
-    # Add all weights to the regularization collection, to do regularization later
-    for weight in list(weights.values())[1:-1]:
-        tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES, weight)
-
-    return weights
+def get_convolution_layer(input_layer, filter_size):
+    conv = tf.nn.conv2d(input_layer, tf.Variable(tf.truncated_normal((filter_size, embedding_size, 1, num_filters_per_size))),
+                        stride, 'VALID')
+    return tf.nn.relu(tf.nn.bias_add(conv, tf.Variable(tf.constant(0.1, shape=(num_filters_per_size,)))))
 
 
-def generate_biases():
-    npl = int(nodes_per_layer * layers_scalar)
-    biases = {}
-
-    i = 0
-    for i in range(1, layers + 1):
-        biases[i] = tf.Variable(tf.random_normal([max(npl, classes)]))
-        npl = int(npl * layers_scalar)
-
-    biases[i + 1] = tf.Variable(tf.random_normal([classes]))
-
-    return biases
+def get_pooling_layer(input_layer, max_document_length, filter_size):
+    return tf.nn.max_pool(input_layer, (1, max_document_length - filter_size + 1, 1, 1), stride, 'VALID')
 
 
 def process_data(train_data, test_data):
-    # word_indexes = list(range(18232))  # Used to randomly assign the integer indexes to each word
-    word_indexes = list(range(4734))  # Used to randomly assign the integer indexes to each word
+    max_document_length = 0
     total_words = 0
     words = {}
 
-    # Shuffle the indexes
-    random.shuffle(word_indexes)
-
-    # Assign indices to words
+    # Assign unique integers to each word
     for text in train_data.data:
-        for word in keep_alphanumeric.sub('', text).split(' '):
-            if words.setdefault(word.lower(), word_indexes[0]) == word_indexes[0]:
-                word_indexes.pop(0)
+        words_in_text = [word for word in keep_alphanumeric.sub(' ', text).split(' ') if word]
+        max_document_length = max(max_document_length, len(words_in_text))
+        for word in words_in_text:
+            if words.setdefault(word.lower(), total_words) == total_words:
                 total_words += 1
 
     for text in test_data.data:
-        for word in keep_alphanumeric.sub('', text).split(' '):
-            if words.setdefault(word.lower(), word_indexes[0]) == word_indexes[0]:
-                word_indexes.pop(0)
+        words_in_text = [word for word in keep_alphanumeric.sub(' ', text).split(' ') if word]
+        max_document_length = max(max_document_length, len(words_in_text))
+        for word in words_in_text:
+            if words.setdefault(word.lower(), total_words) == total_words:
                 total_words += 1
 
-    print(total_words)
     train_input = []
     train_output = []
     test_input = []
@@ -119,10 +101,9 @@ def process_data(train_data, test_data):
 
     # Morph data into usable inputs and outputs
     for text in train_data.data:
-        input_layer = np.zeros(total_words, dtype=float)
-        for word in keep_alphanumeric.sub('', text).split(' '):
-            input_layer[words[word.lower()]] += 1
-        # input_layer -= len(keep_alphanumeric.sub('', text).split(' ')) / total_words  # Subtract the mean
+        input_layer = np.zeros(max_document_length, dtype=int)
+        for i, word in enumerate([word for word in keep_alphanumeric.sub(' ', text).split(' ') if word]):
+            input_layer[i] = words[word.lower()]
         train_input.append(input_layer)
 
     for category in train_data.target:
@@ -131,10 +112,9 @@ def process_data(train_data, test_data):
         train_output.append(output_layer)
 
     for text in test_data.data:
-        input_layer = np.zeros(total_words, dtype=float)
-        for word in keep_alphanumeric.sub('', text).split(' '):
-            input_layer[words[word.lower()]] += 1
-        # input_layer -= len(keep_alphanumeric.sub('', text).split(' ')) / total_words  # Subtract the mean
+        input_layer = np.zeros(max_document_length, dtype=int)
+        for i, word in enumerate([word for word in keep_alphanumeric.sub(' ', text).split(' ') if word]):
+            input_layer[i] = words[word.lower()]
         test_input.append(input_layer)
 
     for category in test_data.target:
@@ -142,7 +122,7 @@ def process_data(train_data, test_data):
         output_layer[category] = 1.0
         test_output.append(output_layer)
 
-    return total_words, train_input, train_output, test_input, test_output
+    return total_words, max_document_length, train_input, train_output, test_input, test_output
 
 
 def get_batch(input_data, output_data):
@@ -157,16 +137,15 @@ def get_batch(input_data, output_data):
 
 
 def main():
-    total_words, train_input, train_output, test_input, test_output = process_data(train_data_raw, test_data_raw)
+    total_words, max_document_length, train_input, train_output, test_input, test_output = process_data(train_data_raw, test_data_raw)
 
-    weights = generate_weights(total_words)
-    biases = generate_biases()
+    print(max_document_length)
 
-    input_tensor = tf.placeholder(tf.float32, [None, total_words], name="input")
+    input_tensor = tf.placeholder(tf.int32, [None, max_document_length], name="input")
     output_tensor = tf.placeholder(tf.float32, [None, classes], name="output")
 
     # Construct model
-    prediction = get_network(input_tensor, weights, biases)
+    prediction = get_network(input_tensor, total_words, max_document_length)
 
     # Define regularizer
     # regularization_variables = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
