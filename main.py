@@ -5,19 +5,19 @@ import tensorflow as tf
 import numpy as np
 from sklearn.datasets import fetch_20newsgroups
 
-classes = 5
+classes = 20
 
-embedding_size = 150
-filter_sizes = (2, 3, 4, 5, 6)
-num_filters_per_size = 100
+embedding_size = 300
+filter_sizes = (3, 4, 5)
+num_filters_per_size = 150
 stride = (1, 1, 1, 1)
 
-learning_rate = 0.1
-keep_rate = 0.7
+learning_rate = 0.001
+keep_rate = 0.5
 beta = 1e-4
 relux_max = 1e15
 
-training_epochs = 100
+training_epochs = 20
 batch_size = 50  # Set to maximum size that will run on my Macbook Pro GPU, you can make it higher if you have more GPU memory
 nodes_per_layer = 100
 layers_scalar = 1  # Scales the number of nodes in each layer down
@@ -27,15 +27,15 @@ keep_alphanumeric = re.compile('[^ \w\']+', re.UNICODE)  # Used to remove all no
 
 config_limit_gpu_memory = 0.49  # Limits how much GPU memory is used so that the program doesn't crash
 
-train_data_raw = fetch_20newsgroups(subset='train', shuffle=True, remove=('headers', 'footers', 'quotes'),#)
-                                    categories=('comp.graphics', 'comp.os.ms-windows.misc', 'comp.sys.ibm.pc.hardware',
-                                                'comp.sys.mac.hardware', 'comp.windows.x',
-                                                ))
+train_data_raw = fetch_20newsgroups(subset='train', shuffle=True, remove=('headers', 'footers', 'quotes'))
+                                    # categories=('comp.graphics', 'comp.os.ms-windows.misc', 'comp.sys.ibm.pc.hardware',
+                                    #             'comp.sys.mac.hardware', 'comp.windows.x',
+                                    #             ))
                                     # categories=('alt.atheism', 'rec.autos', 'sci.crypt'))
-test_data_raw = fetch_20newsgroups(subset='test', shuffle=True, remove=('headers', 'footers', 'quotes'),#)
-                                   categories=('comp.graphics', 'comp.os.ms-windows.misc', 'comp.sys.ibm.pc.hardware',
-                                               'comp.sys.mac.hardware', 'comp.windows.x',
-                                               ))
+test_data_raw = fetch_20newsgroups(subset='test', shuffle=True, remove=('headers', 'footers', 'quotes'))
+                                   # categories=('comp.graphics', 'comp.os.ms-windows.misc', 'comp.sys.ibm.pc.hardware',
+                                   #             'comp.sys.mac.hardware', 'comp.windows.x',
+                                   #             ))
                                    # categories=('alt.atheism', 'rec.autos', 'sci.crypt'))
 
 
@@ -80,15 +80,26 @@ def process_data(train_data, test_data):
     words = {}
 
     # Assign unique integers to each word
-    for text in train_data.data:
+    for text in train_data.data[:]:
         words_in_text = [word for word in keep_alphanumeric.sub(' ', text).split(' ') if word]
+
+        # Discard data that is really lengthy, simplifies training time is not very useful anyways
+        if len(words_in_text) > 500:
+            train_data.data.remove(text)
+            continue
+
         max_document_length = max(max_document_length, len(words_in_text))
         for word in words_in_text:
             if words.setdefault(word.lower(), total_words) == total_words:
                 total_words += 1
 
-    for text in test_data.data:
+    for text in test_data.data[:]:
         words_in_text = [word for word in keep_alphanumeric.sub(' ', text).split(' ') if word]
+
+        if len(words_in_text) > 500:
+            test_data.data.remove(text)
+            continue
+
         max_document_length = max(max_document_length, len(words_in_text))
         for word in words_in_text:
             if words.setdefault(word.lower(), total_words) == total_words:
@@ -176,17 +187,16 @@ def main():
             for i in range(len(train_input) // batch_size):
                 loss_amount, _ = session.run(fetches=[loss, optimizer], feed_dict={input_tensor: next(train_batch_generator),
                                                                                    output_tensor: next(train_batch_generator)})
-                # print('Epoch: {} batch: {} loss: {}'.format(epoch, i, loss_amount))
+                print('Epoch: {} batch: {} loss: {}'.format(epoch, i, loss_amount))
 
-            if epoch % 10 == 0:
-                correct_prediction = tf.equal(tf.argmax(prediction, 1), tf.argmax(output_tensor, 1))
-                accuracy = tf.reduce_mean(tf.cast(correct_prediction, 'float'))
+            correct_prediction = tf.equal(tf.argmax(prediction, 1), tf.argmax(output_tensor, 1))
+            accuracy = tf.reduce_mean(tf.cast(correct_prediction, 'float'))
 
-                test_batch_generator = get_batch(test_input, test_output)
-                test_accuracy = 0
-                for i in range(len(test_input) // batch_size):
-                    test_accuracy += accuracy.eval({input_tensor: next(test_batch_generator), output_tensor: next(test_batch_generator)})
-                print('Test Accuracy:', test_accuracy / (len(test_input) // batch_size))
+            test_batch_generator = get_batch(test_input, test_output)
+            test_accuracy = 0
+            for i in range(len(test_input) // batch_size):
+                test_accuracy += accuracy.eval({input_tensor: next(test_batch_generator), output_tensor: next(test_batch_generator)})
+            print('Test Accuracy:', test_accuracy / (len(test_input) // batch_size))
 
         # Test model
         correct_prediction = tf.equal(tf.argmax(prediction, 1), tf.argmax(output_tensor, 1))
