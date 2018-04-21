@@ -93,7 +93,7 @@ def process_data(train_data, test_data):
 
         # Truncate lengthy documents
         if len(words_in_text) > max_document_length_cap:
-            words_in_text = words_in_text[:max_document_length]
+            words_in_text = words_in_text[:max_document_length_cap]
 
         max_document_length = max(max_document_length, len(words_in_text))
         for word in words_in_text:
@@ -104,13 +104,13 @@ def process_data(train_data, test_data):
         words_in_text = [word for word in keep_alphanumeric.sub('', text).split(' ') if word]
 
         # Discard empty data
-        if not words_in_text or len(words_in_text) > max_document_length_cap:
+        if not words_in_text:
             test_skips.append(i)
             continue
 
         # Truncate lengthy documents
         if len(words_in_text) > max_document_length_cap:
-            words_in_text = words_in_text[:max_document_length]
+            words_in_text = words_in_text[:max_document_length_cap]
 
         max_document_length = max(max_document_length, len(words_in_text))
         for word in words_in_text:
@@ -126,8 +126,15 @@ def process_data(train_data, test_data):
     for i, text in enumerate(train_data.data):
         if i in train_skips:
             continue
+
+        words_in_text = [word for word in keep_alphanumeric.sub('', text).split(' ') if word]
+
+        # Truncate lengthy documents
+        if len(words_in_text) > max_document_length_cap:
+            words_in_text = words_in_text[:max_document_length_cap]
+
         input_layer = np.zeros(max_document_length, dtype=int)
-        for j, word in enumerate([word for word in keep_alphanumeric.sub('', text).split(' ') if word]):
+        for j, word in enumerate(words_in_text):
             input_layer[j] = words[word.lower()]
         train_input.append(input_layer)
 
@@ -141,8 +148,15 @@ def process_data(train_data, test_data):
     for i, text in enumerate(test_data.data):
         if i in test_skips:
             continue
+
+        words_in_text = [word for word in keep_alphanumeric.sub('', text).split(' ') if word]
+
+        # Truncate lengthy documents
+        if len(words_in_text) > max_document_length_cap:
+            words_in_text = words_in_text[:max_document_length_cap]
+
         input_layer = np.zeros(max_document_length, dtype=int)
-        for j, word in enumerate([word for word in keep_alphanumeric.sub('', text).split(' ') if word]):
+        for j, word in enumerate(words_in_text):
             input_layer[j] = words[word.lower()]
         test_input.append(input_layer)
 
