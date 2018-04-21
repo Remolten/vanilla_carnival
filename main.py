@@ -7,68 +7,61 @@ from sklearn.datasets import fetch_20newsgroups
 
 classes = 20
 
-embedding_size = 200
+embedding_size = 100
 filter_sizes = (1, 2, 3)
-num_filters_per_size = 150
+num_filters_per_size = 100
 stride = (1, 1, 1, 1)
+max_document_length_cap = 500
 
 learning_rate = 0.07
 keep_rate = 0.5
 beta = 1e-4
-relux_max = 1e15
 
-training_epochs = 10
+training_epochs = 20
 batch_size = 50  # Set to maximum size that will run on my Macbook Pro GPU, you can make it higher if you have more GPU memory
+fc_layers = 1  # Includes the final output layer
+
 nodes_per_layer = 100
 layers_scalar = 1  # Scales the number of nodes in each layer down
-layers = 1  # Number of hidden layers
 
 keep_alphanumeric = re.compile('[^ \w]+', re.UNICODE)  # Used to remove all non-alphanumeric characters from the inputs
 
 config_limit_gpu_memory = 1.0  # Limits how much GPU memory is used so that the program doesn't crash
 
 train_data_raw = fetch_20newsgroups(subset='train', shuffle=True, remove=('headers', 'footers', 'quotes'))
-                                    # categories=('comp.graphics', 'comp.os.ms-windows.misc', 'comp.sys.ibm.pc.hardware',
-                                    #             'comp.sys.mac.hardware', 'comp.windows.x',
-                                    #             ))
-                                    # categories=('alt.atheism', 'rec.autos', 'sci.crypt'))
 test_data_raw = fetch_20newsgroups(subset='test', shuffle=True, remove=('headers', 'footers', 'quotes'))
-                                   # categories=('comp.graphics', 'comp.os.ms-windows.misc', 'comp.sys.ibm.pc.hardware',
-                                   #             'comp.sys.mac.hardware', 'comp.windows.x',
-                                   #             ))
-                                   # categories=('alt.atheism', 'rec.autos', 'sci.crypt'))
-
-
-def relux(x):
-    return tf.minimum(tf.nn.leaky_relu(x), relux_max)
 
 
 def get_network(input_tensor, total_words, max_document_length):
+    num_fc_weights = num_filters_per_size * len(filter_sizes)
+
     # Input/embedding layer
     embedding_weights = tf.Variable(tf.random_uniform([total_words, embedding_size], -1, 1))
     layer = tf.expand_dims(tf.nn.embedding_lookup(embedding_weights, input_tensor), -1)
 
-    # Hidden layers
+    # Convolution + max pooling layers
     conv_pool_layers = []
-    for i in range(layers):
-        for filter_size in filter_sizes:
-            conv = get_convolution_layer(layer, filter_size)
-            conv_pool_layers.append(get_pooling_layer(conv, max_document_length, filter_size))
+    for filter_size in filter_sizes:
+        conv = get_convolution_layer(layer, filter_size)
+        conv_pool_layers.append(get_pooling_layer(conv, max_document_length, filter_size))
 
-    # Concatenate all conv_pool layers to perform dropout
-    layer_before_dropout = tf.reshape(tf.concat(conv_pool_layers, 3), (-1, num_filters_per_size * len(filter_sizes)))
+    # Reshape convolution layers and perform dropout
+    layer_before_dropout = tf.reshape(tf.concat(conv_pool_layers, 3), (-1, num_fc_weights))
     layer = tf.nn.dropout(layer_before_dropout, keep_rate)
 
+    # Intermediate fully connected layers
+    for i in range(fc_layers - 1):
+        layer = tf.nn.xw_plus_b(layer, tf.Variable(tf.random_normal((num_fc_weights, num_fc_weights))),
+                                tf.Variable(tf.random_normal((num_fc_weights,))))
+
     # Output layer
-    return tf.nn.xw_plus_b(layer, tf.Variable(tf.random_normal((num_filters_per_size * len(filter_sizes), classes))),
-                           # tf.Variable(tf.constant(0.1, shape=(classes,))))
+    return tf.nn.xw_plus_b(layer, tf.Variable(tf.random_normal((num_fc_weights, classes))),
                            tf.Variable(tf.random_normal((classes,))))
 
 
 def get_convolution_layer(input_layer, filter_size):
     conv = tf.nn.conv2d(input_layer, tf.Variable(tf.truncated_normal((filter_size, embedding_size, 1, num_filters_per_size))),
                         stride, 'VALID')
-    # return tf.nn.relu(tf.nn.bias_add(conv, tf.Variable(tf.constant(0.1, shape=(num_filters_per_size,)))))
     return tf.nn.leaky_relu(tf.nn.bias_add(conv, tf.Variable(tf.random_normal((num_filters_per_size,)))))
 
 
@@ -78,19 +71,29 @@ def get_pooling_layer(input_layer, max_document_length, filter_size):
 
 def process_data(train_data, test_data):
     max_document_length = 0
-    total_words = 0
+    total_words = 1  # Start at 1 b/c pad word index is 0
     train_skips = []
     test_skips = []
     words = {}
+
+    # Default train/test split is 60/40, make that 80/20 instead
+    # more_train_data, test_data.data = np.array_split(test_data.data, 2)
+    # more_train_target, test_data.target = np.array_split(test_data.target, 2)
+    # np.concatenate((train_data.data, more_train_data))
+    # np.concatenate((train_data.target, more_train_target))
 
     # Assign unique integers to each word
     for i, text in enumerate(train_data.data[:]):
         words_in_text = [word for word in keep_alphanumeric.sub('', text).split(' ') if word]
 
         # Discard empty data
-        if not words_in_text or len(words_in_text) > 500:
+        if not words_in_text:
             train_skips.append(i)
             continue
+
+        # Truncate lengthy documents
+        if len(words_in_text) > max_document_length_cap:
+            words_in_text = words_in_text[:max_document_length]
 
         max_document_length = max(max_document_length, len(words_in_text))
         for word in words_in_text:
@@ -100,9 +103,14 @@ def process_data(train_data, test_data):
     for i, text in enumerate(test_data.data[:]):
         words_in_text = [word for word in keep_alphanumeric.sub('', text).split(' ') if word]
 
-        if not words_in_text or len(words_in_text) > 500:
+        # Discard empty data
+        if not words_in_text or len(words_in_text) > max_document_length_cap:
             test_skips.append(i)
             continue
+
+        # Truncate lengthy documents
+        if len(words_in_text) > max_document_length_cap:
+            words_in_text = words_in_text[:max_document_length]
 
         max_document_length = max(max_document_length, len(words_in_text))
         for word in words_in_text:
@@ -203,7 +211,6 @@ def main():
                                                                                    output_tensor: next(train_batch_generator)})
                 # if i % 10 == 0:
                     # print('Epoch: {} batch: {} loss: {}'.format(epoch, i, loss_amount))
-
 
             test_batch_generator = get_batch(test_input, test_output)
             test_accuracy = 0
