@@ -7,25 +7,25 @@ from sklearn.datasets import fetch_20newsgroups
 
 classes = 20
 
-embedding_size = 300
-filter_sizes = (3, 4, 5)
+embedding_size = 200
+filter_sizes = (1, 2, 3)
 num_filters_per_size = 150
 stride = (1, 1, 1, 1)
 
-learning_rate = 0.001
+learning_rate = 0.07
 keep_rate = 0.5
 beta = 1e-4
 relux_max = 1e15
 
-training_epochs = 20
+training_epochs = 10
 batch_size = 50  # Set to maximum size that will run on my Macbook Pro GPU, you can make it higher if you have more GPU memory
 nodes_per_layer = 100
 layers_scalar = 1  # Scales the number of nodes in each layer down
 layers = 1  # Number of hidden layers
 
-keep_alphanumeric = re.compile('[^ \w\']+', re.UNICODE)  # Used to remove all non-alphanumeric characters from the inputs
+keep_alphanumeric = re.compile('[^ \w]+', re.UNICODE)  # Used to remove all non-alphanumeric characters from the inputs
 
-config_limit_gpu_memory = 0.49  # Limits how much GPU memory is used so that the program doesn't crash
+config_limit_gpu_memory = 1.0  # Limits how much GPU memory is used so that the program doesn't crash
 
 train_data_raw = fetch_20newsgroups(subset='train', shuffle=True, remove=('headers', 'footers', 'quotes'))
                                     # categories=('comp.graphics', 'comp.os.ms-windows.misc', 'comp.sys.ibm.pc.hardware',
@@ -61,13 +61,15 @@ def get_network(input_tensor, total_words, max_document_length):
 
     # Output layer
     return tf.nn.xw_plus_b(layer, tf.Variable(tf.random_normal((num_filters_per_size * len(filter_sizes), classes))),
-                           tf.Variable(tf.constant(0.1, shape=(classes,))))
+                           # tf.Variable(tf.constant(0.1, shape=(classes,))))
+                           tf.Variable(tf.random_normal((classes,))))
 
 
 def get_convolution_layer(input_layer, filter_size):
     conv = tf.nn.conv2d(input_layer, tf.Variable(tf.truncated_normal((filter_size, embedding_size, 1, num_filters_per_size))),
                         stride, 'VALID')
-    return tf.nn.relu(tf.nn.bias_add(conv, tf.Variable(tf.constant(0.1, shape=(num_filters_per_size,)))))
+    # return tf.nn.relu(tf.nn.bias_add(conv, tf.Variable(tf.constant(0.1, shape=(num_filters_per_size,)))))
+    return tf.nn.leaky_relu(tf.nn.bias_add(conv, tf.Variable(tf.random_normal((num_filters_per_size,)))))
 
 
 def get_pooling_layer(input_layer, max_document_length, filter_size):
@@ -77,15 +79,17 @@ def get_pooling_layer(input_layer, max_document_length, filter_size):
 def process_data(train_data, test_data):
     max_document_length = 0
     total_words = 0
+    train_skips = []
+    test_skips = []
     words = {}
 
     # Assign unique integers to each word
-    for text in train_data.data[:]:
-        words_in_text = [word for word in keep_alphanumeric.sub(' ', text).split(' ') if word]
+    for i, text in enumerate(train_data.data[:]):
+        words_in_text = [word for word in keep_alphanumeric.sub('', text).split(' ') if word]
 
-        # Discard data that is really lengthy, simplifies training time is not very useful anyways
-        if len(words_in_text) > 500:
-            train_data.data.remove(text)
+        # Discard empty data
+        if not words_in_text or len(words_in_text) > 500:
+            train_skips.append(i)
             continue
 
         max_document_length = max(max_document_length, len(words_in_text))
@@ -93,11 +97,11 @@ def process_data(train_data, test_data):
             if words.setdefault(word.lower(), total_words) == total_words:
                 total_words += 1
 
-    for text in test_data.data[:]:
-        words_in_text = [word for word in keep_alphanumeric.sub(' ', text).split(' ') if word]
+    for i, text in enumerate(test_data.data[:]):
+        words_in_text = [word for word in keep_alphanumeric.sub('', text).split(' ') if word]
 
-        if len(words_in_text) > 500:
-            test_data.data.remove(text)
+        if not words_in_text or len(words_in_text) > 500:
+            test_skips.append(i)
             continue
 
         max_document_length = max(max_document_length, len(words_in_text))
@@ -111,24 +115,32 @@ def process_data(train_data, test_data):
     test_output = []
 
     # Morph data into usable inputs and outputs
-    for text in train_data.data:
+    for i, text in enumerate(train_data.data):
+        if i in train_skips:
+            continue
         input_layer = np.zeros(max_document_length, dtype=int)
-        for i, word in enumerate([word for word in keep_alphanumeric.sub(' ', text).split(' ') if word]):
-            input_layer[i] = words[word.lower()]
+        for j, word in enumerate([word for word in keep_alphanumeric.sub('', text).split(' ') if word]):
+            input_layer[j] = words[word.lower()]
         train_input.append(input_layer)
 
-    for category in train_data.target:
+    for i, category in enumerate(train_data.target):
+        if i in train_skips:
+            continue
         output_layer = np.zeros((classes,), dtype=float)
         output_layer[category] = 1.0
         train_output.append(output_layer)
 
-    for text in test_data.data:
+    for i, text in enumerate(test_data.data):
+        if i in test_skips:
+            continue
         input_layer = np.zeros(max_document_length, dtype=int)
-        for i, word in enumerate([word for word in keep_alphanumeric.sub(' ', text).split(' ') if word]):
-            input_layer[i] = words[word.lower()]
+        for j, word in enumerate([word for word in keep_alphanumeric.sub('', text).split(' ') if word]):
+            input_layer[j] = words[word.lower()]
         test_input.append(input_layer)
 
-    for category in test_data.target:
+    for i, category in enumerate(test_data.target):
+        if i in test_skips:
+            continue
         output_layer = np.zeros((classes,), dtype=float)
         output_layer[category] = 1.0
         test_output.append(output_layer)
@@ -150,8 +162,6 @@ def get_batch(input_data, output_data):
 def main():
     total_words, max_document_length, train_input, train_output, test_input, test_output = process_data(train_data_raw, test_data_raw)
 
-    print(max_document_length)
-
     input_tensor = tf.placeholder(tf.int32, [None, max_document_length], name="input")
     output_tensor = tf.placeholder(tf.float32, [None, classes], name="output")
 
@@ -170,6 +180,10 @@ def main():
     # Define the optimizer
     optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(loss)
 
+    # Create accuracy testers
+    correct_prediction = tf.equal(tf.argmax(prediction, 1), tf.argmax(output_tensor, 1))
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction, 'float'))
+
     # Initializing the variables
     init = tf.global_variables_initializer()
     # init = tf.initialize_all_variables()
@@ -187,10 +201,9 @@ def main():
             for i in range(len(train_input) // batch_size):
                 loss_amount, _ = session.run(fetches=[loss, optimizer], feed_dict={input_tensor: next(train_batch_generator),
                                                                                    output_tensor: next(train_batch_generator)})
-                print('Epoch: {} batch: {} loss: {}'.format(epoch, i, loss_amount))
+                # if i % 10 == 0:
+                    # print('Epoch: {} batch: {} loss: {}'.format(epoch, i, loss_amount))
 
-            correct_prediction = tf.equal(tf.argmax(prediction, 1), tf.argmax(output_tensor, 1))
-            accuracy = tf.reduce_mean(tf.cast(correct_prediction, 'float'))
 
             test_batch_generator = get_batch(test_input, test_output)
             test_accuracy = 0
@@ -198,24 +211,11 @@ def main():
                 test_accuracy += accuracy.eval({input_tensor: next(test_batch_generator), output_tensor: next(test_batch_generator)})
             print('Test Accuracy:', test_accuracy / (len(test_input) // batch_size))
 
-        # Test model
-        correct_prediction = tf.equal(tf.argmax(prediction, 1), tf.argmax(output_tensor, 1))
-
-        # Calculate accuracy
-        accuracy = tf.reduce_mean(tf.cast(correct_prediction, 'float'))
-
-        # Calculate the average accuracy from mini batches, which are necessary because of limited GPU memory
-        test_batch_generator = get_batch(test_input, test_output)
-        test_accuracy = 0
-        for i in range(len(test_input) // batch_size):
-            test_accuracy += accuracy.eval({input_tensor: next(test_batch_generator), output_tensor: next(test_batch_generator)})
-
         train_batch_generator = get_batch(train_input, train_output)
         train_accuracy = 0
         for i in range(len(train_input) // batch_size):
             train_accuracy += accuracy.eval({input_tensor: next(train_batch_generator), output_tensor: next(train_batch_generator)})
 
-        print('Test Accuracy:', test_accuracy / (len(test_input) // batch_size))
         print('Train Accuracy:', train_accuracy / (len(train_input) // batch_size))
 
 
