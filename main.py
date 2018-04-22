@@ -7,9 +7,9 @@ from sklearn.datasets import fetch_20newsgroups
 
 classes = 20
 
-embedding_size = 100
+embedding_size = 75
 filter_sizes = (1, 2, 3)
-num_filters_per_size = 100
+num_filters_per_size = 150
 stride = (1, 1, 1, 1)
 max_document_length_cap = 500
 
@@ -17,9 +17,10 @@ learning_rate = 0.07
 keep_rate = 0.5
 beta = 1e-4
 
-training_epochs = 20
+training_epochs = 10
 batch_size = 50  # Set to maximum size that will run on my Macbook Pro GPU, you can make it higher if you have more GPU memory
-fc_layers = 1  # Includes the final output layer
+num_conv_layers = 2
+num_fc_layers = 1  # Includes the final output layer
 
 nodes_per_layer = 100
 layers_scalar = 1  # Scales the number of nodes in each layer down
@@ -41,16 +42,19 @@ def get_network(input_tensor, total_words, max_document_length):
 
     # Convolution + max pooling layers
     conv_pool_layers = []
-    for filter_size in filter_sizes:
-        conv = get_convolution_layer(layer, filter_size)
-        conv_pool_layers.append(get_pooling_layer(conv, max_document_length, filter_size))
+    for i in range(num_conv_layers):
+        layer = tf.reshape(layer, (-1, max_document_length, embedding_size, 1))
+        for filter_size in filter_sizes:
+            conv_layer = get_convolution_layer(layer, filter_size)
+            conv_pool_layers.append(get_pooling_layer(conv_layer, max_document_length, filter_size))
+        layer = tf.concat(conv_pool_layers, 3)
 
-    # Reshape convolution layers and perform dropout
-    layer_before_dropout = tf.reshape(tf.concat(conv_pool_layers, 3), (-1, num_fc_weights))
+    # Reshape the last convolution layers to perform dropout
+    layer_before_dropout = tf.reshape(layer, (-1, num_fc_weights))
     layer = tf.nn.dropout(layer_before_dropout, keep_rate)
 
     # Intermediate fully connected layers
-    for i in range(fc_layers - 1):
+    for i in range(num_fc_layers - 1):
         layer = tf.nn.xw_plus_b(layer, tf.Variable(tf.random_normal((num_fc_weights, num_fc_weights))),
                                 tf.Variable(tf.random_normal((num_fc_weights,))))
 
@@ -61,12 +65,12 @@ def get_network(input_tensor, total_words, max_document_length):
 
 def get_convolution_layer(input_layer, filter_size):
     conv = tf.nn.conv2d(input_layer, tf.Variable(tf.truncated_normal((filter_size, embedding_size, 1, num_filters_per_size))),
-                        stride, 'VALID')
+                        stride, 'SAME')
     return tf.nn.leaky_relu(tf.nn.bias_add(conv, tf.Variable(tf.random_normal((num_filters_per_size,)))))
 
 
 def get_pooling_layer(input_layer, max_document_length, filter_size):
-    return tf.nn.max_pool(input_layer, (1, max_document_length - filter_size + 1, 1, 1), stride, 'VALID')
+    return tf.nn.max_pool(input_layer, (1, max_document_length - filter_size + 1, 1, 1), stride, 'SAME')
 
 
 def process_data(train_data, test_data):
