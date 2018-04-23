@@ -63,6 +63,12 @@ hyperparameters, when compared to other types of neural networks. As such, they 
 to achieve optimal performance. For the new machine learning programmer, it can be difficult to know exactly what to select, because the
 entire network, including the hyperparameters, seems like magic.
 
+\subsection{The Dataset}
+Text classification will be done on the 20 newsgroups dataset. Essentially, the data is a collection of forum posts, that each belong to a
+different sub-forum. Some of the categories include 'rec.autos', 'sci.crypt', 'alt.atheism', and 'soc.religion.christian'. In total, there
+are 20 categories, with some of them being very similar. Thus, this is considered to be a fairly difficult text classification problem for
+deep learning.
+
 \section{Methods}
 In this section, I explain how my CNN was constructed, including data preprocessing and the network architecture itself.
 
@@ -147,12 +153,14 @@ I experimented with changing various hyperparameters to optimize accuracy—incl
     2, 3, 5 & 0.4805555554727713 & 0.910999996824698 \\
     2, 3, 7 & 0.4927777755591604 & 0.915909086574207 \\
     3, 4, 5 & 0.4038888886570930 & 0.820636357773434 \\
-    4, 5, 6 & 1 & 1 \\
+    4, 5, 6 & 0.2844444442954328 & 0.6822727299549363 \\
     \bottomrule
-  \end{tabular}
+  \end{tabular
 \end{table}
 
+\newpage
 Table~\ref{tab:filter_sizes} shows various filter sizes that were tried, and their respective final accuracies when trained over 10 epochs.
+The default embedding size of 75 was used.
 The filter size of 2 appears to have caused the greatest difference in accuracy. Further, choosing the smaller filter sizes generally
 produced the best results.
 
@@ -175,7 +183,7 @@ produced the best results.
   \end{tabular}
 \end{table}
 
-Table~\ref{tab:embedding_sizes} shows various embedding sizes that were tried.
+Table~\ref{tab:embedding_sizes} shows various embedding sizes that were tried. The default filter sizes of 1, 2, and 3 were used.
 As the results show, it seems that embeddings between sizes 75 and 200 had similar accuracy. On the other hand, smaller embeddings of
 size 50 did not perform as well. Finally, larger embeddings of size 300 or 400 provided the best accuracy at the cost of training speed.
 
