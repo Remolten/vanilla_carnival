@@ -9,3 +9,6 @@ This project requires the `tensorflow`, `numpy`, and `sklearn` Python packages. 
 
 ## Obtaining the Data
 `sklearn` is used in the code itself to obtain the 20 newsgroups dataset.
+
+## Research Paper
+A research paper written according to the [NIPS](https://nips.cc/) format can be found at [paper/paper.pdf](paper/paper.pdf).
