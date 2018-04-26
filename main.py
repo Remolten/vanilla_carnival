@@ -16,6 +16,7 @@ max_document_length_cap = 500  # To speed training, enforce a max document size
 learning_rate = 0.12
 keep_rate = 0.5  # Percentage to keep when doing dropout
 l2_lambda = 1e-4
+alpha = 0.2
 
 training_epochs = 10
 batch_size = 50
@@ -66,7 +67,7 @@ def get_convolution_layer(input_layer, filter_size):
                         initializer=tf.truncated_normal_initializer, regularizer=tf.nn.l2_loss)
     b = tf.get_variable('cb{}'.format(filter_size), [num_filters_per_size], initializer=tf.random_normal_initializer)
     layer = tf.nn.conv2d(input_layer, w, stride, 'VALID')
-    return tf.nn.leaky_relu(tf.nn.bias_add(layer, b))
+    return tf.nn.leaky_relu(tf.nn.bias_add(layer, b), alpha=alpha)
 
 
 def get_pooling_layer(input_layer, max_document_length, filter_size):
@@ -228,19 +229,31 @@ def main():
                 loss_amount, _ = session.run(fetches=[loss, optimizer], feed_dict={input_tensor: next(train_batch_generator),
                                                                                    output_tensor: next(train_batch_generator)})
 
-            # Test the test accuracy after each epoch
+            # Check the test accuracy after each epoch
             test_batch_generator = get_batch(test_input, test_output)
             test_accuracy = 0
             for i in range(num_test_batches):
                 test_accuracy += accuracy.eval({input_tensor: next(test_batch_generator), output_tensor: next(test_batch_generator)})
             print('Epoch:', epoch, 'Test Accuracy:', test_accuracy / num_test_batches)
 
-        # Test the final training accuracy
-        train_batch_generator = get_batch(train_input, train_output)
-        train_accuracy = 0
-        for i in range(num_train_batches):
-            train_accuracy += accuracy.eval({input_tensor: next(train_batch_generator), output_tensor: next(train_batch_generator)})
-        print('Train Accuracy:', train_accuracy / num_train_batches)
+            # Check the train accuracy after each epoch
+            train_batch_generator = get_batch(train_input, train_output)
+            train_accuracy = 0
+            for i in range(num_train_batches):
+                train_accuracy += accuracy.eval({input_tensor: next(train_batch_generator), output_tensor: next(train_batch_generator)})
+            print('Train Accuracy:', train_accuracy / num_train_batches)
+
+        # Check final test accuracy for each category
+        new_test_input = []
+        new_test_output = []
+        for category in range(classes):
+            for i, test in enumerate(test_output):
+                if test[category] == 1.0:
+                    new_test_output.append(test)
+                    new_test_input.append(test_input[i])
+            print(test_data_raw.target_names[category] + ':', accuracy.eval({input_tensor: new_test_input, output_tensor: new_test_output}))
+            new_test_input.clear()
+            new_test_output.clear()
 
 
 if __name__ == '__main__':
